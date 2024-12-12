@@ -3,14 +3,13 @@ import face_recognition
 import numpy as np
 import cv2
 from flask_cors import CORS
-import psycopg2
 import os
 from ultralytics import YOLO
 import mysql.connector
 
 
 app = Flask(__name__)
-CORS(app, resources={r"/process_frame": {"origins": "http://127.0.0.1:8000"}})
+CORS(app, resources={r"/process_frame": {"origins": "http://michael.playandbreak.site/"}})
 model = YOLO('yolov8n.pt')  # Ensure the model path is correct
 
 def load_known_faces():
@@ -44,6 +43,79 @@ def load_known_faces():
 
 # Load the known faces into memory
 known_face_encodings, known_face_names = load_known_faces()
+MATCH_THRESHOLD = 0.6
+
+@app.route('/process_frame', methods=['POST'])
+def process_frame():
+    try:
+        file = request.files['image']
+        npimg = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+
+        # Perform YOLOv8 detection (assuming this works fine)
+        results = model(img)
+        detections = results[0].boxes.xyxy.numpy()
+        classes = results[0].boxes.cls.numpy()
+        confidences = results[0].boxes.conf.numpy()
+
+        person_detected = False
+        low_confidence_person = False
+        cellphone_detected = False
+
+        for box, cls, conf in zip(detections, classes, confidences):
+            class_name = model.names[int(cls)]
+            if class_name == 'cellphone':
+                cellphone_detected = True
+            if class_name == 'person':
+                person_detected = True
+                if conf < 0.5:
+                    low_confidence_person = True
+
+        if low_confidence_person and cellphone_detected:
+            return jsonify({'error': 'Low-confidence person detected along with a cellphone. Process halted.'}), 400
+
+        face_locations = []
+        face_names = []
+        if person_detected and not low_confidence_person:
+            face_locations = face_recognition.face_locations(img)
+
+            if not face_locations:
+                print("No faces detected.")
+                return jsonify({'message': 'No faces detected in the image.'}), 200
+
+            face_encodings = face_recognition.face_encodings(img, face_locations)
+
+            for face_encoding in face_encodings:
+                matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+
+                name = "Unknown"
+                face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+                best_match_index = np.argmin(face_distances)  # Get the index of the closest match
+
+                # If the distance is below a certain threshold, use the best match
+                if face_distances[best_match_index] < MATCH_THRESHOLD:
+                    name = known_face_names[best_match_index]
+                    print(f"Face match found: {name}")
+                else:
+                    print("No match found for this face.")
+
+                face_names.append(name)
+
+        return jsonify({
+            'face_locations': face_locations,
+            'face_names': face_names,
+            'detections': [
+                {
+                    'name': model.names[int(cls)],
+                    'box': box.tolist(),
+                    'confidence': float(conf)
+                } for box, cls, conf in zip(detections, classes, confidences)
+            ]
+        })
+
+    except Exception as e:
+        print(f"Error in process_frame: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/train_face', methods=['POST'])
 def train_face():
@@ -87,79 +159,6 @@ def train_face():
             return jsonify({'error': 'No faces found in the image'}), 400
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/process_frame', methods=['POST'])
-def process_frame():
-    try:
-        file = request.files['image']
-        npimg = np.frombuffer(file.read(), np.uint8)
-        img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-
-        # Perform YOLOv8 detection
-        results = model(img)
-        detections = results[0].boxes.xyxy.numpy()
-        classes = results[0].boxes.cls.numpy()
-        confidences = results[0].boxes.conf.numpy()
-
-        # Flags to determine if conditions are met to stop processing
-        person_detected = False
-        low_confidence_person = False
-        cellphone_detected = False
-
-        # Check each detection
-        for box, cls, conf in zip(detections, classes, confidences):
-            class_name = model.names[int(cls)]
-            if class_name == 'cellphone':  # Adjust based on the actual class name in your model
-                cellphone_detected = True
-            if class_name == 'person':
-                person_detected = True
-                if conf < 0.5:
-                    low_confidence_person = True
-
-        # If a low-confidence person is detected along with a cellphone, stop processing
-        if low_confidence_person and cellphone_detected:
-            return jsonify({'error': 'Low-confidence person detected along with a cellphone. Process halted.'}), 400
-
-        # If no person is detected or confidence is high enough, proceed with face recognition
-        face_locations = []
-        face_names = []
-        if person_detected and not low_confidence_person:
-            face_locations = face_recognition.face_locations(img)
-
-            if not face_locations:
-                print("No faces detected.")
-                return jsonify({'message': 'No faces detected in the image.'}), 200
-
-            face_encodings = face_recognition.face_encodings(img, face_locations)
-
-            for face_encoding in face_encodings:
-                matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-                name = "Unknown"
-                
-                if True in matches:
-                    first_match_index = matches.index(True)
-                    name = known_face_names[first_match_index]
-                    print(f"Face match found: {name}")
-                else:
-                    print("No match found for this face.")
-                
-                face_names.append(name)
-
-        return jsonify({
-            'face_locations': face_locations,
-            'face_names': face_names,
-            'detections': [
-                {
-                    'name': model.names[int(cls)],
-                    'box': box.tolist(),
-                    'confidence': float(conf)
-                } for box, cls, conf in zip(detections, classes, confidences)
-            ]
-        })
-
-    except Exception as e:
-        print(f"Error in process_frame: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':

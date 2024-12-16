@@ -43,7 +43,7 @@ def load_known_faces():
 
 # Load the known faces into memory
 known_face_encodings, known_face_names = load_known_faces()
-MATCH_THRESHOLD = 0.6
+MATCH_THRESHOLD = 0.8
 
 @app.route('/process_frame', methods=['POST'])
 def process_frame():

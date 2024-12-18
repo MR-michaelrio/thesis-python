@@ -106,11 +106,7 @@ def process_frame():
                     cursor = connection.cursor(dictionary=True)
                     query = """
                         SELECT 
-                            e.id_employee, e.profile_picture, e.first_name, e.last_name, e.full_name, e.gender,
-                            e.marital, e.religion, e.place_of_birth, e.date_of_birth, e.id_address_employee,
-                            e.id_users, e.id_company, e.status,
-                            u.email, u.phone, u.role, u.start_work, u.stop_work, u.supervisor,
-                            u.emergency_name, u.emergency_relation, u.emergency_phone, u.identification_number
+                            e.first_name, u.identification_number
                         FROM 
                             employee e
                         LEFT JOIN 

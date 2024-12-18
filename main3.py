@@ -114,7 +114,7 @@ def process_frame():
                         FROM 
                             employee e
                         LEFT JOIN 
-                            user u 
+                            users u 
                         ON 
                             e.id_users = u.id_user
                         WHERE 

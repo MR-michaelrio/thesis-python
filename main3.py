@@ -76,6 +76,7 @@ def process_frame():
 
         face_locations = []
         face_names = []
+        employees = []
         if person_detected and not low_confidence_person:
             face_locations = face_recognition.face_locations(img)
 
@@ -95,6 +96,22 @@ def process_frame():
                 # If the distance is below a certain threshold, use the best match
                 if face_distances[best_match_index] < MATCH_THRESHOLD:
                     name = known_face_names[best_match_index]
+                    connection = mysql.connector.connect(
+                        host=os.getenv("DB_HOST", "185.199.53.230"),
+                        port=os.getenv("DB_PORT", "3306"),
+                        database=os.getenv("DB_NAME", "thesis"),
+                        user=os.getenv("DB_USERNAME", "michael"),
+                        password=os.getenv("DB_PASSWORD", "Luminoso1")
+                    )
+                    cursor = connection.cursor(dictionary=True)
+                    cursor.execute("SELECT * FROM employee WHERE id_employee = %s", (name,))
+                    employee_data = cursor.fetchone()  # Fetch the employee details
+
+                    cursor.close()
+                    connection.close()
+
+                    if employee_data:
+                        employees.append(employee_data)
                     print(f"Face match found: {name}")
                 else:
                     print("No match found for this face.")
@@ -104,6 +121,7 @@ def process_frame():
         return jsonify({
             'face_locations': face_locations,
             'face_names': face_names,
+            'employees': employees,  # Add detailed employee data
             'detections': [
                 {
                     'name': model.names[int(cls)],

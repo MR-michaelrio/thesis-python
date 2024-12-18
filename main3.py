@@ -104,11 +104,27 @@ def process_frame():
                         password=os.getenv("DB_PASSWORD", "Luminoso1")
                     )
                     cursor = connection.cursor(dictionary=True)
-                    cursor.execute("SELECT * FROM employee WHERE id_employee = %s", (name,))
-                    employee_data = cursor.fetchone()  # Fetch the employee details
+                    query = """
+                        SELECT 
+                            e.id_employee, e.profile_picture, e.first_name, e.last_name, e.full_name, e.gender,
+                            e.marital, e.religion, e.place_of_birth, e.date_of_birth, e.id_address_employee,
+                            e.id_users, e.id_company, e.status,
+                            u.email, u.phone, u.role, u.start_work, u.stop_work, u.supervisor,
+                            u.emergency_name, u.emergency_relation, u.emergency_phone, u.identification_number
+                        FROM 
+                            employee e
+                        LEFT JOIN 
+                            user u 
+                        ON 
+                            e.id_users = u.id_user
+                        WHERE 
+                            e.id_employee = %s
+                    """
+                    cursor.execute(query, (name,))
+                    employee_data = cursor.fetchone()  # Fetch the combined employee-user details
 
                     cursor.close()
-                    connection.close()
+                    connection.close() 
 
                     if employee_data:
                         employees.append(employee_data)

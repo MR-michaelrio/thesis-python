@@ -36,7 +36,7 @@ def load_known_faces(id_company=None):
                 FROM face_encoding e
             """
             cursor.execute(query)
-        cursor.execute(query, (id_company))
+            
         rows = cursor.fetchall()
         known_face_encodings = []
         known_face_names = []

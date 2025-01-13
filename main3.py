@@ -12,7 +12,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/process_frame": {"origins": "https://michael.playandbreak.site/"}})
 model = YOLO('yolov8n.pt')  # Ensure the model path is correct
 
-def load_known_faces(id_company):
+def load_known_faces(id_company=None):
     try:
         connection = mysql.connector.connect(
             user=os.getenv("DB_USERNAME", "michael"),
@@ -22,12 +22,20 @@ def load_known_faces(id_company):
             database=os.getenv("DB_NAME", "thesis")
         )
         cursor = connection.cursor()
-        query = """
-            SELECT e.id_employee, e.encoding_data 
-            FROM face_encoding e
-            JOIN employee emp ON e.id_employee = emp.id_employee
-            WHERE emp.id_company = %s
-        """
+        if id_company:
+            query = """
+                SELECT e.id_employee, e.encoding_data 
+                FROM face_encoding e
+                JOIN employee emp ON e.id_employee = emp.id_employee
+                WHERE emp.id_company = %s
+            """
+            cursor.execute(query, (id_company,))
+        else:
+            query = """
+                SELECT e.id_employee, e.encoding_data 
+                FROM face_encoding e
+            """
+            cursor.execute(query)
         cursor.execute(query, (id_company))
         rows = cursor.fetchall()
         known_face_encodings = []

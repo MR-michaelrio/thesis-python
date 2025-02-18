@@ -25,7 +25,8 @@ app.add_middleware(
 # Load YOLO model
 model = YOLO('yolov8n.pt')
 
-MATCH_THRESHOLD = 0.5
+MATCH_THRESHOLD = 0.8
+
 def load_known_faces(id_company=None):
     try:
         connection = mysql.connector.connect(
@@ -91,7 +92,7 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
 
         face_encodings = face_recognition.face_encodings(img, face_locations)
         employees = []
-        detected_ids = set()
+
         for face_encoding in face_encodings:
             face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
             best_match_index = np.argmin(face_distances)
@@ -100,31 +101,28 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
             if similarity >= MATCH_THRESHOLD:
                 name = known_face_names[best_match_index]
 
-                if name not in detected_ids:  # Cegah duplikasi
-                    detected_ids.add(name)
+                connection = mysql.connector.connect(
+                    user=os.getenv("DB_USERNAME", "michael"),
+                    password=os.getenv("DB_PASSWORD", "Luminoso1"),
+                    host=os.getenv("DB_HOST", "185.199.53.230"),
+                    port=os.getenv("DB_PORT", "3306"),
+                    database=os.getenv("DB_NAME", "thesis")
+                )
+                cursor = connection.cursor(dictionary=True)
 
-                    connection = mysql.connector.connect(
-                        user=os.getenv("DB_USERNAME", "michael"),
-                        password=os.getenv("DB_PASSWORD", "Luminoso1"),
-                        host=os.getenv("DB_HOST", "185.199.53.230"),
-                        port=os.getenv("DB_PORT", "3306"),
-                        database=os.getenv("DB_NAME", "thesis")
-                    )
-                    cursor = connection.cursor(dictionary=True)
+                cursor.execute("""
+                    SELECT e.full_name, u.identification_number
+                    FROM employee e
+                    LEFT JOIN users u ON e.id_users = u.id_user
+                    WHERE e.id_employee = %s
+                """, (name,))
 
-                    cursor.execute("""
-                        SELECT e.full_name, u.identification_number
-                        FROM employee e
-                        LEFT JOIN users u ON e.id_users = u.id_user
-                        WHERE e.id_employee = %s
-                    """, (name,))
+                employee_data = cursor.fetchone()
+                if employee_data:
+                    employees.append(employee_data)
 
-                    employee_data = cursor.fetchone()
-                    if employee_data:
-                        employees.append(employee_data)
-
-                    cursor.close()
-                    connection.close()
+                cursor.close()
+                connection.close()
 
         detections_list = [
             {

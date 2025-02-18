@@ -10,7 +10,7 @@ import mysql.connector
 
 app = Flask(__name__)
 CORS(app, resources={r"/process_frame": {"origins": "https://anttendance.playandbreak.site/"}})
-model = YOLO('yolov8n.pt')  # Ensure the model path is correct
+model = YOLO('yolov8n.pt')
 
 def load_known_faces(id_company=None):
     try:

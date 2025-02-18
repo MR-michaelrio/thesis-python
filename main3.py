@@ -71,7 +71,6 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
 
         img = cv2.imdecode(np.frombuffer(image.file.read(), np.uint8), cv2.IMREAD_COLOR)
         img = cv2.resize(img, (600, 600))
-        img = cv2.GaussianBlur(img, (3, 3), 0)
 
         results = model(img)
         detections = results[0].boxes.xyxy.numpy()

@@ -99,7 +99,7 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
             best_distance = face_distances[best_match_index]
             confidence = max(0, 1 - best_distance) * 100
 
-            if confidence >= 80:
+            if confidence >= 70:
                 name = known_face_names[best_match_index]
 
                 connection = mysql.connector.connect(

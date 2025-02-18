@@ -8,6 +8,7 @@ import cv2
 import os
 import mysql.connector
 from ultralytics import YOLO
+from functools import lru_cache
 
 app = FastAPI()
 
@@ -26,7 +27,7 @@ app.add_middleware(
 model = YOLO('yolov8n.pt')
 
 MATCH_THRESHOLD = 0.5
-
+@lru_cache(maxsize=100)
 def load_known_faces(id_company=None):
     try:
         connection = mysql.connector.connect(
@@ -71,6 +72,8 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
             raise HTTPException(status_code=404, detail="No known faces available.")
 
         img = cv2.imdecode(np.frombuffer(image.file.read(), np.uint8), cv2.IMREAD_COLOR)
+        img = cv2.resize(img, (600, 600))
+        img = cv2.GaussianBlur(img, (3, 3), 0)
 
         results = model(img)
         detections = results[0].boxes.xyxy.numpy()

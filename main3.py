@@ -95,6 +95,8 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
 
         for face_encoding in face_encodings:
             face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+            print("Face distances:", face_distances)
+
             best_match_index = np.argmin(face_distances)
             similarity = 1 - face_distances[best_match_index]
 
@@ -129,7 +131,7 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
                 'name': model.names[int(cls)],
                 'box': box.tolist(),
                 'confidence': float(conf),
-                'similar': face_distances,
+                'similar': float(similarity),
             } for box, cls, conf in zip(detections, classes, confidences)
         ]
 

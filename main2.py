@@ -3,26 +3,40 @@ import face_recognition
 import numpy as np
 import cv2
 from flask_cors import CORS
-import mysql.connector
 import os
 from ultralytics import YOLO
+import mysql.connector
+
 
 app = Flask(__name__)
-CORS(app, resources={r"/process_frame": {"origins": "http://127.0.0.1:8000"}})
-model = YOLO('yolov8n.pt')  # Ensure the model path is correct
+CORS(app, resources={r"/process_frame": {"origins": "https://anttendance.playandbreak.site/"}})
+model = YOLO('yolov8n.pt')
 
-# Fungsi untuk memuat encoding wajah yang disimpan di database
-def load_known_faces():
+def load_known_faces(id_company=None):
     try:
         connection = mysql.connector.connect(
             user=os.getenv("DB_USERNAME", "michael"),
             password=os.getenv("DB_PASSWORD", "Luminoso1"),
             host=os.getenv("DB_HOST", "185.199.53.230"),
-            port=int(os.getenv("DB_PORT", "3306")),
-            database=os.getenv("DB_DATABASE", "thesis")
+            port=os.getenv("DB_PORT", "3306"),
+            database=os.getenv("DB_NAME", "thesis")
         )
         cursor = connection.cursor()
-        cursor.execute("SELECT id_employee, encoding_data, id_company FROM face_encoding")
+        if id_company:
+            query = """
+                SELECT e.id_employee, e.encoding_data 
+                FROM face_encoding e
+                JOIN employee emp ON e.id_employee = emp.id_employee
+                WHERE emp.id_company = %s
+            """
+            cursor.execute(query, (id_company,))
+        else:
+            query = """
+                SELECT e.id_employee, e.encoding_data 
+                FROM face_encoding e
+            """
+            cursor.execute(query)
+            
         rows = cursor.fetchall()
         known_face_encodings = []
         known_face_names = []
@@ -34,109 +48,172 @@ def load_known_faces():
 
         cursor.close()
         connection.close()
+
         return known_face_encodings, known_face_names
+
     except Exception as e:
-        print(f"Error loading known faces: {e}")
+        print(f"Error loading known faces from the database: {e}")
         return [], []
 
-# Fungsi untuk menangani proses frame (deteksi wajah, ekstraksi encoding, dan pencocokan)
+# Load the known faces into memory
+known_face_encodings, known_face_names = load_known_faces()
+MATCH_THRESHOLD = 0.8
+
 @app.route('/process_frame', methods=['POST'])
 def process_frame():
     try:
-        # Ambil gambar dari request
-        image_file = request.files.get('image')
-        if not image_file:
-            return jsonify({'error': 'No image provided'}), 400
+        # Pastikan 'id_company' dikirim dari permintaan
+        id_company = request.form.get('id_company')
+        if not id_company:
+            return jsonify({'error': 'id_company is required'}), 400
 
-        # Membaca gambar dan mengonversi ke format yang dibutuhkan
-        img_array = np.frombuffer(image_file.read(), np.uint8)
-        image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        
-        # Deteksi wajah menggunakan YOLO dan face_recognition
-        results = model(image)  # Menggunakan YOLO untuk mendeteksi wajah
-        boxes = results.xyxy[0].cpu().numpy()  # Mendapatkan bounding box wajah yang terdeteksi
-        
+        # Muat encoding wajah berdasarkan perusahaan
+        known_face_encodings, known_face_names = load_known_faces(id_company)
+
+        file = request.files['image']
+        npimg = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+
+        # (Proses YOLO dan face recognition tetap sama)
+        results = model(img)
+        detections = results[0].boxes.xyxy.numpy()
+        classes = results[0].boxes.cls.numpy()
+        confidences = results[0].boxes.conf.numpy()
+
+        # Proses deteksi tetap sama, tidak ada perubahan
+        person_detected = False
+        low_confidence_person = False
+        cellphone_detected = False
+
+        for box, cls, conf in zip(detections, classes, confidences):
+            class_name = model.names[int(cls)]
+            if class_name == 'cellphone':
+                cellphone_detected = True
+            if class_name == 'person':
+                person_detected = True
+                if conf < 0.5:
+                    low_confidence_person = True
+
+        if low_confidence_person and cellphone_detected:
+            return jsonify({'error': 'Low-confidence person detected along with a cellphone. Process halted.'}), 400
+
         face_locations = []
-        for box in boxes:
-            # Box: [x1, y1, x2, y2]
-            x1, y1, x2, y2 = map(int, box[:4])
-            face_locations.append((y1, x2, y2, x1))  # face_recognition membutuhkan urutan (top, right, bottom, left)
-        
-        # Mengambil encoding wajah menggunakan face_recognition
-        face_encodings = face_recognition.face_encodings(image, face_locations)
-
-        # Memuat wajah yang sudah terdaftar di database
-        known_face_encodings, known_face_names = load_known_faces()
-        
         face_names = []
-        for face_encoding in face_encodings:
-            # Mencocokkan wajah yang terdeteksi dengan wajah yang ada di database
-            matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-            name = "Unknown"
-            
-            if True in matches:
-                first_match_index = matches.index(True)
-                name = known_face_names[first_match_index]
-            face_names.append(name)
+        employees = []
 
-        return jsonify({'detected_faces': face_names, 'boxes': boxes.tolist()})
+        if person_detected and not low_confidence_person:
+            face_locations = face_recognition.face_locations(img, model="cnn")
+
+            if not face_locations:
+                print("No faces detected.")
+                return jsonify({'message': 'No faces detected in the image.'}), 200
+
+            face_encodings = face_recognition.face_encodings(img, face_locations)
+
+            for face_encoding in face_encodings:
+                matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+
+                name = "Unknown"
+                face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+                best_match_index = np.argmin(face_distances)
+
+                if face_distances[best_match_index] < MATCH_THRESHOLD:
+                    name = known_face_names[best_match_index]
+                    connection = mysql.connector.connect(
+                        host=os.getenv("DB_HOST", "185.199.53.230"),
+                        port=os.getenv("DB_PORT", "3306"),
+                        database=os.getenv("DB_NAME", "thesis"),
+                        user=os.getenv("DB_USERNAME", "michael"),
+                        password=os.getenv("DB_PASSWORD", "Luminoso1")
+                    )
+                    cursor = connection.cursor(dictionary=True)
+                    query = """
+                        SELECT 
+                            e.full_name, u.identification_number
+                        FROM 
+                            employee e
+                        LEFT JOIN 
+                            users u 
+                        ON 
+                            e.id_users = u.id_user
+                        WHERE 
+                            e.id_employee = %s
+                    """
+                    cursor.execute(query, (name,))
+                    employee_data = cursor.fetchone()
+
+                    cursor.close()
+                    connection.close()
+
+                    if employee_data:
+                        employees.append(employee_data)
+                    print(f"Face match found: {name}")
+                else:
+                    print("No match found for this face.")
+
+                face_names.append(name)
+
+        return jsonify({
+            'face_locations': face_locations,
+            'face_names': face_names,
+            'employees': employees,
+            'detections': [
+                {
+                    'name': model.names[int(cls)],
+                    'box': box.tolist(),
+                    'confidence': float(conf)
+                } for box, cls, conf in zip(detections, classes, confidences)
+            ]
+        })
+
 
     except Exception as e:
-        print(f"Error processing frame: {e}")
-        return jsonify({'error': 'An error occurred during face processing'}), 500
+        print(f"Error in process_frame: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
-# Fungsi untuk menyimpan encoding wajah ke database (pastikan kolom 'encoding_data' adalah LONGBLOB)
 @app.route('/train_face', methods=['POST'])
 def train_face():
     try:
-        # Ambil data wajah (encoding) dari request
-        image_file = request.files.get('image')
-        if not image_file:
-            return jsonify({'error': 'No image file provided'}), 400
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image part in the request'}), 400
 
-        # Baca gambar dari file
-        img_array = np.frombuffer(image_file.read(), np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        file = request.files['image']
+        npimg = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
 
-        # Ekstrak encoding wajah
+        if img is None:
+            return jsonify({'error': 'Failed to decode image'}), 400
+
         face_encodings = face_recognition.face_encodings(img)
 
         if len(face_encodings) > 0:
             encoding = face_encodings[0]
-
-            # Koneksi ke database MySQL
+            # Save the encoding to the database (MySQL)
             connection = mysql.connector.connect(
-                user=os.getenv("DB_USERNAME", "michael"),
-                password=os.getenv("DB_PASSWORD", "Luminoso1"),
                 host=os.getenv("DB_HOST", "185.199.53.230"),
-                port=int(os.getenv("DB_PORT", "3306")),
-                database=os.getenv("DB_DATABASE", "thesis")
+                port=os.getenv("DB_PORT", "3306"),
+                database=os.getenv("DB_DATABASE", "thesis"),
+                user=os.getenv("DB_USERNAME", "michael"),
+                password=os.getenv("DB_PASSWORD", "Luminoso1")
             )
             cursor = connection.cursor()
 
-            # Ambil ID karyawan dan perusahaan dari form request
-            id_employee = request.form.get('id_employee')
-            id_company = request.form.get('id_company')
+            # Example of inserting a new face encoding into the database
+            insert_query = "INSERT INTO face_encoding (id_employee, encoding_data,id_company) VALUES (%s, %s, %s)"
+            encoding_bytes = encoding.tobytes()  # Convert encoding to bytes for storage
 
-            if not id_employee or not id_company:
-                return jsonify({'error': 'Employee ID or Company ID is missing'}), 400
-
-            # Simpan encoding wajah ke database
-            cursor.execute(
-                "INSERT INTO face_encoding (id_employee, encoding_data, id_company) VALUES (%s, %s, %s)",
-                (id_employee, np.array(encoding).tobytes(), id_company)
-            )
-
+            cursor.execute(insert_query, (request.form['id_employee'], encoding_bytes,request.form['id_company']))
             connection.commit()
+
             cursor.close()
             connection.close()
 
-            return jsonify({'status': 'success', 'message': 'Face encoding saved successfully'}), 200
+            return jsonify({'message': 'Face encoding saved successfully'}), 200
         else:
-            return jsonify({'error': 'No faces found in image'}), 400
+            return jsonify({'error': 'No faces found in the image'}), 400
 
     except Exception as e:
-        return jsonify({'error': f"An error occurred: {str(e)}"}), 500
+        return jsonify({'error': str(e)}), 500
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run(host='0.0.0.0', port=6002)

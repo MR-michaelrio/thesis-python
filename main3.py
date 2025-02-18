@@ -1,16 +1,30 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import face_recognition
 import numpy as np
 import cv2
-from flask_cors import CORS
 import os
-from ultralytics import YOLO
 import mysql.connector
+from ultralytics import YOLO
 
+app = FastAPI()
 
-app = Flask(__name__)
-CORS(app, resources={r"/process_frame": {"origins": "https://anttendance.playandbreak.site/"}})
+# Konfigurasi CORS
+origins = ["https://anttendance.playandbreak.site"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Load YOLO model
 model = YOLO('yolov8n.pt')
+
+MATCH_THRESHOLD = 0.8
 
 def load_known_faces(id_company=None):
     try:
@@ -22,29 +36,21 @@ def load_known_faces(id_company=None):
             database=os.getenv("DB_NAME", "thesis")
         )
         cursor = connection.cursor()
+
+        query = """
+            SELECT e.id_employee, e.encoding_data 
+            FROM face_encoding e
+            JOIN employee emp ON e.id_employee = emp.id_employee
+        """
         if id_company:
-            query = """
-                SELECT e.id_employee, e.encoding_data 
-                FROM face_encoding e
-                JOIN employee emp ON e.id_employee = emp.id_employee
-                WHERE emp.id_company = %s
-            """
+            query += " WHERE emp.id_company = %s"
             cursor.execute(query, (id_company,))
         else:
-            query = """
-                SELECT e.id_employee, e.encoding_data 
-                FROM face_encoding e
-            """
             cursor.execute(query)
-            
-        rows = cursor.fetchall()
-        known_face_encodings = []
-        known_face_names = []
 
-        for row in rows:
-            id_employee, encoding_data = row
-            known_face_encodings.append(np.frombuffer(encoding_data, dtype=np.float64))
-            known_face_names.append(id_employee)
+        rows = cursor.fetchall()
+        known_face_encodings = [np.frombuffer(row[1], dtype=np.float64) for row in rows]
+        known_face_names = [row[0] for row in rows]
 
         cursor.close()
         connection.close()
@@ -55,165 +61,107 @@ def load_known_faces(id_company=None):
         print(f"Error loading known faces from the database: {e}")
         return [], []
 
-# Load the known faces into memory
-known_face_encodings, known_face_names = load_known_faces()
-MATCH_THRESHOLD = 0.8
-
-@app.route('/process_frame', methods=['POST'])
-def process_frame():
+@app.post("/process_frame")
+async def process_frame(id_company: str = Form(...), image: UploadFile = File(...)):
     try:
-        # Pastikan 'id_company' dikirim dari permintaan
-        id_company = request.form.get('id_company')
-        if not id_company:
-            return jsonify({'error': 'id_company is required'}), 400
-
-        # Muat encoding wajah berdasarkan perusahaan
         known_face_encodings, known_face_names = load_known_faces(id_company)
 
-        file = request.files['image']
-        npimg = np.frombuffer(file.read(), np.uint8)
-        img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+        if not known_face_encodings:
+            raise HTTPException(status_code=404, detail="No known faces available.")
 
-        # (Proses YOLO dan face recognition tetap sama)
+        img = cv2.imdecode(np.frombuffer(image.file.read(), np.uint8), cv2.IMREAD_COLOR)
+
         results = model(img)
         detections = results[0].boxes.xyxy.numpy()
         classes = results[0].boxes.cls.numpy()
         confidences = results[0].boxes.conf.numpy()
 
-        # Proses deteksi tetap sama, tidak ada perubahan
-        person_detected = False
-        low_confidence_person = False
-        cellphone_detected = False
+        person_detected = any(model.names[int(cls)] == 'person' for cls in classes)
+        cellphone_detected = any(model.names[int(cls)] == 'cellphone' for cls in classes)
 
-        for box, cls, conf in zip(detections, classes, confidences):
-            class_name = model.names[int(cls)]
-            if class_name == 'cellphone':
-                cellphone_detected = True
-            if class_name == 'person':
-                person_detected = True
-                if conf < 0.5:
-                    low_confidence_person = True
+        if cellphone_detected:
+            raise HTTPException(status_code=400, detail="Cellphone detected. Process halted.")
 
-        if low_confidence_person and cellphone_detected:
-            return jsonify({'error': 'Low-confidence person detected along with a cellphone. Process halted.'}), 400
+        if not person_detected:
+            return {"message": "No person detected."}
 
-        face_locations = []
-        face_names = []
+        face_locations = face_recognition.face_locations(img, model="cnn")
+        if not face_locations:
+            return {"message": "No faces detected."}
+
+        face_encodings = face_recognition.face_encodings(img, face_locations)
         employees = []
 
-        if person_detected and not low_confidence_person:
-            face_locations = face_recognition.face_locations(img, model="cnn")
+        for face_encoding in face_encodings:
+            face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+            best_match_index = np.argmin(face_distances)
 
-            if not face_locations:
-                print("No faces detected.")
-                return jsonify({'message': 'No faces detected in the image.'}), 200
+            if face_distances[best_match_index] < MATCH_THRESHOLD:
+                name = known_face_names[best_match_index]
 
-            face_encodings = face_recognition.face_encodings(img, face_locations)
+                connection = mysql.connector.connect(
+                    user=os.getenv("DB_USERNAME", "michael"),
+                    password=os.getenv("DB_PASSWORD", "Luminoso1"),
+                    host=os.getenv("DB_HOST", "185.199.53.230"),
+                    port=os.getenv("DB_PORT", "3306"),
+                    database=os.getenv("DB_NAME", "thesis")
+                )
+                cursor = connection.cursor(dictionary=True)
 
-            for face_encoding in face_encodings:
-                matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+                cursor.execute("""
+                    SELECT e.full_name, u.identification_number
+                    FROM employee e
+                    LEFT JOIN users u ON e.id_users = u.id_user
+                    WHERE e.id_employee = %s
+                """, (name,))
 
-                name = "Unknown"
-                face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-                best_match_index = np.argmin(face_distances)
+                employee_data = cursor.fetchone()
+                if employee_data:
+                    employees.append(employee_data)
 
-                if face_distances[best_match_index] < MATCH_THRESHOLD:
-                    name = known_face_names[best_match_index]
-                    connection = mysql.connector.connect(
-                        host=os.getenv("DB_HOST", "185.199.53.230"),
-                        port=os.getenv("DB_PORT", "3306"),
-                        database=os.getenv("DB_NAME", "thesis"),
-                        user=os.getenv("DB_USERNAME", "michael"),
-                        password=os.getenv("DB_PASSWORD", "Luminoso1")
-                    )
-                    cursor = connection.cursor(dictionary=True)
-                    query = """
-                        SELECT 
-                            e.full_name, u.identification_number
-                        FROM 
-                            employee e
-                        LEFT JOIN 
-                            users u 
-                        ON 
-                            e.id_users = u.id_user
-                        WHERE 
-                            e.id_employee = %s
-                    """
-                    cursor.execute(query, (name,))
-                    employee_data = cursor.fetchone()
+                cursor.close()
+                connection.close()
 
-                    cursor.close()
-                    connection.close()
-
-                    if employee_data:
-                        employees.append(employee_data)
-                    print(f"Face match found: {name}")
-                else:
-                    print("No match found for this face.")
-
-                face_names.append(name)
-
-        return jsonify({
-            'face_locations': face_locations,
-            'face_names': face_names,
-            'employees': employees,
-            'detections': [
-                {
-                    'name': model.names[int(cls)],
-                    'box': box.tolist(),
-                    'confidence': float(conf)
-                } for box, cls, conf in zip(detections, classes, confidences)
-            ]
-        })
-
+        return {"employees": employees}
 
     except Exception as e:
-        print(f"Error in process_frame: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.route('/train_face', methods=['POST'])
-def train_face():
+@app.post("/train_face")
+async def train_face(id_employee: str = Form(...), id_company: str = Form(...), image: UploadFile = File(...)):
     try:
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image part in the request'}), 400
-
-        file = request.files['image']
-        npimg = np.frombuffer(file.read(), np.uint8)
-        img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-
-        if img is None:
-            return jsonify({'error': 'Failed to decode image'}), 400
+        img = cv2.imdecode(np.frombuffer(image.file.read(), np.uint8), cv2.IMREAD_COLOR)
 
         face_encodings = face_recognition.face_encodings(img)
+        if not face_encodings:
+            raise HTTPException(status_code=400, detail="No faces found in the image.")
 
-        if len(face_encodings) > 0:
-            encoding = face_encodings[0]
-            # Save the encoding to the database (MySQL)
-            connection = mysql.connector.connect(
-                host=os.getenv("DB_HOST", "185.199.53.230"),
-                port=os.getenv("DB_PORT", "3306"),
-                database=os.getenv("DB_DATABASE", "thesis"),
-                user=os.getenv("DB_USERNAME", "michael"),
-                password=os.getenv("DB_PASSWORD", "Luminoso1")
-            )
-            cursor = connection.cursor()
+        encoding = face_encodings[0].tobytes()
 
-            # Example of inserting a new face encoding into the database
-            insert_query = "INSERT INTO face_encoding (id_employee, encoding_data,id_company) VALUES (%s, %s, %s)"
-            encoding_bytes = encoding.tobytes()  # Convert encoding to bytes for storage
+        connection = mysql.connector.connect(
+            user=os.getenv("DB_USERNAME", "michael"),
+            password=os.getenv("DB_PASSWORD", "Luminoso1"),
+            host=os.getenv("DB_HOST", "185.199.53.230"),
+            port=os.getenv("DB_PORT", "3306"),
+            database=os.getenv("DB_NAME", "thesis")
+        )
+        cursor = connection.cursor()
 
-            cursor.execute(insert_query, (request.form['id_employee'], encoding_bytes,request.form['id_company']))
-            connection.commit()
+        cursor.execute("""
+            INSERT INTO face_encoding (id_employee, encoding_data, id_company)
+            VALUES (%s, %s, %s)
+        """, (id_employee, encoding, id_company))
 
-            cursor.close()
-            connection.close()
+        connection.commit()
 
-            return jsonify({'message': 'Face encoding saved successfully'}), 200
-        else:
-            return jsonify({'error': 'No faces found in the image'}), 400
+        cursor.close()
+        connection.close()
+
+        return {"message": "Face encoding saved successfully."}
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=6002)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=6002)

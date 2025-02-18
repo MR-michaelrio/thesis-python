@@ -96,8 +96,9 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
         for face_encoding in face_encodings:
             face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
             best_match_index = np.argmin(face_distances)
+            similarity = 1 - face_distances[best_match_index]
 
-            if face_distances[best_match_index] < MATCH_THRESHOLD:
+            if similarity >= MATCH_THRESHOLD:
                 name = known_face_names[best_match_index]
 
                 connection = mysql.connector.connect(
@@ -128,7 +129,7 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
                 'name': model.names[int(cls)],
                 'box': box.tolist(),
                 'confidence': float(conf)
-            } for box, cls, conf in zip(detections, classes, confidences)
+            } for box, cls, conf in zip(detections, classes, similarity)
         ]
 
         return JSONResponse({

@@ -96,8 +96,10 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
         for face_encoding in face_encodings:
             face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
             best_match_index = np.argmin(face_distances)
+            best_distance = face_distances[best_match_index]
+            confidence = max(0, 1 - (best_distance / MATCH_THRESHOLD))  # Hitung akurasi (0 - 1)
 
-            if face_distances[best_match_index] < MATCH_THRESHOLD:
+            if best_distance < MATCH_THRESHOLD:
                 name = known_face_names[best_match_index]
 
                 connection = mysql.connector.connect(
@@ -118,6 +120,8 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
 
                 employee_data = cursor.fetchone()
                 if employee_data:
+                    # Tambahkan tingkat akurasi ke dalam hasil
+                    employee_data["confidence"] = round(confidence * 100, 2)  # Dalam persen
                     employees.append(employee_data)
 
                 cursor.close()

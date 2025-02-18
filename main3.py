@@ -122,7 +122,20 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
                 cursor.close()
                 connection.close()
 
-        return {"employees": employees}
+        detections_list = [
+            {
+                'name': model.names[int(cls)],
+                'box': box.tolist(),
+                'confidence': float(conf)
+            } for box, cls, conf in zip(detections, classes, confidences)
+        ]
+
+        return JSONResponse({
+            'face_locations': face_locations,
+            'face_names': known_face_names,
+            'employees': employees,
+            'detections': detections_list
+        })
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

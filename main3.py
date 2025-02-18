@@ -128,8 +128,9 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
             {
                 'name': model.names[int(cls)],
                 'box': box.tolist(),
-                'confidence': float(conf)
-            } for box, cls, conf in zip(detections, classes, similarity)
+                'confidence': float(conf),
+                'similarity': float(similarity) 
+            } for box, cls, conf in zip(detections, classes, confidences)
         ]
 
         return JSONResponse({

@@ -102,7 +102,7 @@ def process_frame():
         employees = []
 
         if person_detected and not low_confidence_person:
-            face_locations = face_recognition.face_locations(img)
+            face_locations = face_recognition.face_locations(img, model="cnn")
 
             if not face_locations:
                 print("No faces detected.")

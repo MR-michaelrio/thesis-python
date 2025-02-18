@@ -95,8 +95,6 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
 
         for face_encoding in face_encodings:
             face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-            print("Face distances:", face_distances)
-
             best_match_index = np.argmin(face_distances)
             similarity = 1 - face_distances[best_match_index]
 
@@ -149,8 +147,8 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
 async def train_face(id_employee: str = Form(...), id_company: str = Form(...), image: UploadFile = File(...)):
     try:
         img = cv2.imdecode(np.frombuffer(image.file.read(), np.uint8), cv2.IMREAD_COLOR)
-
-        face_encodings = face_recognition.face_encodings(img)
+        face_locations = face_recognition.face_locations(img, model="cnn")
+        face_encodings = face_recognition.face_encodings(img, face_locations)
         if not face_encodings:
             raise HTTPException(status_code=400, detail="No faces found in the image.")
 

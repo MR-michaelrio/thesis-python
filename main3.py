@@ -121,7 +121,7 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
                 employee_data = cursor.fetchone()
                 if employee_data:
                     # Tambahkan tingkat akurasi ke dalam hasil
-                    employee_data["confidence"] = round(confidence * 100, 2)  # Dalam persen
+                    employee_data["confidence"] = round(confidence, 2) # Dalam persen
                     employees.append(employee_data)
 
                 cursor.close()

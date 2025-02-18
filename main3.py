@@ -8,7 +8,6 @@ import cv2
 import os
 import mysql.connector
 from ultralytics import YOLO
-from functools import lru_cache
 
 app = FastAPI()
 
@@ -27,7 +26,6 @@ app.add_middleware(
 model = YOLO('yolov8n.pt')
 
 MATCH_THRESHOLD = 0.5
-@lru_cache(maxsize=100)
 def load_known_faces(id_company=None):
     try:
         connection = mysql.connector.connect(

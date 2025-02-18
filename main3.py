@@ -70,7 +70,6 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
             raise HTTPException(status_code=404, detail="No known faces available.")
 
         img = cv2.imdecode(np.frombuffer(image.file.read(), np.uint8), cv2.IMREAD_COLOR)
-        img = cv2.resize(img, (600, 600))
 
         results = model(img)
         detections = results[0].boxes.xyxy.numpy()

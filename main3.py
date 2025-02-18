@@ -97,9 +97,9 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
             face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
             best_match_index = np.argmin(face_distances)
             best_distance = face_distances[best_match_index]
-            confidence = max(0, 1 - (best_distance / MATCH_THRESHOLD))  # Hitung akurasi (0 - 1)
+            confidence = max(0, 1 - best_distance) * 100
 
-            if best_distance < MATCH_THRESHOLD:
+            if confidence >= 80:
                 name = known_face_names[best_match_index]
 
                 connection = mysql.connector.connect(

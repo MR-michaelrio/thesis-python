@@ -25,7 +25,7 @@ app.add_middleware(
 # Load YOLO model
 model = YOLO('yolov8n.pt')
 
-MATCH_THRESHOLD = 0.8
+MATCH_THRESHOLD = 0.5
 
 def load_known_faces(id_company=None):
     try:

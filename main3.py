@@ -77,7 +77,7 @@ async def process_frame(id_company: str = Form(...), image: UploadFile = File(..
         classes = results[0].boxes.cls.numpy()
         confidences = results[0].boxes.conf.numpy()
 
-        person_detected = any(model.names[int(cls)] == 'person' and conf > 0.5 for cls, conf in zip(classes, confidences))
+        person_detected = any(model.names[int(cls)] == 'person' and conf > 0.6 for cls, conf in zip(classes, confidences))
         cellphone_detected = any(model.names[int(cls)] == 'cellphone' for cls in classes)
 
         if cellphone_detected:
